@@ -5,7 +5,7 @@
   ;;
   (:gen-class)
   (:require
-    [clojure.core.async :refer [go-loop]]
+    [clojure.core.async :refer [go chan <! put! close!]]
     [clojure.tools.nrepl.server :refer [start-server stop-server]]
     [clojure.tools.nrepl :as repl]
     [clojure.tools.logging :refer [debug debugf]]
@@ -17,80 +17,110 @@
     [clojure.pprint :refer [pprint]]))
 
 ;;-----------------------------------------------------------------------------
+
+(defprotocol ISvc
+  (start! [this]
+    "Start the service.")
+  (stop! [this]
+    "Stop the service, resetting all local state."))
+
+(defn- on-jvm-shutdown!
+  [f]
+  (doto (Runtime/getRuntime)
+    (.addShutdownHook (Thread. f))))
+
+(defn- find-port
+  []
+  (let [s (java.net.ServerSocket. 0)
+        port (.getLocalPort s)]
+    (.close s)
+    port))
+
+;;-----------------------------------------------------------------------------
 ;; Repl Server
 
-(def repl-port 64444)
-(def repl-server (atom nil))
+(defrecord ^:private ReplServer [port !server]
+  ISvc
+  (start! [_]
+    (debugf " - starting repl server on port %s." port)
+    (reset! !server (start-server :port port)))
+  (stop! [_]
+    (debug " - stopping repl server.")
+    (when-let [server @!server]
+      (stop-server server)
+      (reset! !server nil))))
 
-(defn start-server!
-  []
-  (debugf " - starting repl server on port %s." repl-port)
-  (if (nil? @repl-server)
-    (do (reset! repl-server (start-server :port repl-port))
-        :started)
-    (do (debug "Please stop server first.")
-        :not-started)))
-
-(defn stop-server!
-  []
-  (debug " - stopping repl server.")
-  (when-let [s @repl-server]
-    (stop-server s)
-    (reset! repl-server nil)
-    :stopped))
+(defn- make-repl-server
+  [port]
+  (ReplServer. port (atom nil)))
 
 ;;-----------------------------------------------------------------------------
 ;; Repl Client
 
-(def rc (atom {:conn nil
-               :client nil
-               :session nil}))
+(defprotocol IReplClient
+  (send-cmd! [this cmd]
+    "Send a command to the repl server."))
 
-(defn send-cmd
-  [!rc cmd]
-  (let [{:keys [client session]} @!rc
+(defrecord ^:private ReplClient [port !state]
+  ISvc
+  (start! [_]
+    (debugf " - starting proxy repl client on port %s." port)
+    (let [conn (repl/connect :port port)
+          client (repl/client conn 10000)
+          session (repl/new-session client)]
+      (reset! !state {:conn conn :client client :session session})))
+  (stop! [_]
+    (debug " - stopping proxy repl client.")
+    (when-let [conn (:conn @!state)]
+      (.close conn))
+    (reset! !state {:conn nil :client nil :session nil}))
+  IReplClient
+  (send-cmd! [_ cmd]
+    (let [{:keys [client session]} @!state
         msg (assoc cmd :session session)]
     (->> (repl/message client msg)
-         ;; (repl/combine-responses)
-         doall)))
+         doall))))
 
-(defn start-client!
-  []
-  (debug " - starting proxy repl client.")
-  (let [conn (repl/connect :port repl-port)
-        client (repl/client conn 10000)
-        session (repl/new-session client)]
-    (swap! rc assoc :conn conn :client client :session session)))
-
-(defn stop-client!
-  []
-  (debug " - stopping proxy repl client.")
-  (when-let [conn (:conn @rc)]
-    (.close conn)
-    (reset! rc {:conn nil :client nil :session nil}))
-  :client-stopped)
+(defn- make-repl-client
+  [port]
+  (ReplClient. port (atom {:conn nil :client nil :session nil})))
 
 ;;-----------------------------------------------------------------------------
 ;; Web Server
 
+(defn- shutdown-monitor
+  [channel conn]
+  (go
+    (<! conn)
+    (httpd/close channel)))
+
+(defn- close-handler
+  [!conns conn]
+  (fn [status]
+    (debugf "sock> clos: [%s]." status)
+    (swap! !conns disj conn)))
+
+(defn- receive-handler
+  [repl-client channel]
+  (fn [data]
+    (debugf "sock> recv: [%s]." data)
+    (let [result (send-cmd! repl-client {:op :eval :code data})]
+      (debugf "sock> send << %s >>" (pr-str result))
+      (httpd/send! channel (str [:eval-resp result])))))
+
 (defn- socket-handler
-  []
-  (fn [request]
-    (debug "http> got socket connect")
-    (httpd/with-channel request channel
-      (httpd/on-close channel
-        (fn [status]
-          (debugf "sock> clos: [%s]." status)))
-      (httpd/on-receive channel
-        (fn [data]
-          (debugf "sock> recv: [%s]." data)
-          (let [result (send-cmd rc {:op :eval :code data})]
-            (debugf "sock> send << %s >>" (pr-str result))
-            (httpd/send! channel (str [:eval-resp result]))
-            ))))))
+  [repl-client !conns]
+  (let [conn (chan)]
+    (swap! !conns conj conn)
+    (fn [request]
+      (debug "http> got socket connect")
+      (httpd/with-channel request channel
+        (shutdown-monitor channel conn)
+        (httpd/on-close channel (close-handler !conns conn))
+        (httpd/on-receive channel (receive-handler repl-client channel))))))
 
 (defn- main-routes
-  []
+  [repl-client !conns]
   (routes
    (GET "/"
      []
@@ -104,50 +134,63 @@
             [:body "Loading..."]))
    (GET "/ws"
      []
-     (socket-handler))
+     (socket-handler repl-client !conns))
    (route/resources "/")
    (route/not-found "<h1><a href='/'>Here?</a></h1>")))
 
-(def ^:private web-server (atom nil))
+(defrecord ^:private WebSvc [port repl-client !conns !server]
+  ISvc
+  (start! [_]
+    (debugf " - starting web-app service on port %s." port)
+    (let [handlers (fn [r] ((main-routes repl-client !conns) r))
+          params {:port port :worker-name-prefix "http-"}
+          server (httpd/run-server handlers params)]
+      (reset! !server server)))
+  ;;
+  (stop! [_]
+    (debug " - stopping web-app service.")
+    (when-let [server @!server]
+      ;;
+      ;; Close connected sockets.
+      ;;
+      (doseq [c @!conns]
+        (close! c))
+      ;;
+      ;; Wait a bit.
+      ;;
+      (Thread/sleep 100)
+      (server :timeout 1000)
+      (reset! !server nil)
+      (reset! !conns #{}))))
 
-(defn start-webapp!
-  []
-  (debug " - starting web-app service.")
-  (let [handlers (fn [r] ((main-routes) r))
-        params {:port 1337 :worker-name-prefix "http-"}
-        server (httpd/run-server handlers params)]
-    (reset! web-server server)))
-
-(defn stop-webapp!
-  []
-  (debug " - stopping web-app service.")
-  (if-let [s @web-server]
-    (do (s)
-        (reset! web-server nil)
-        :stopped)
-    :not-running))
+(defn- make-web-svc
+  [port repl-client]
+  (WebSvc. port repl-client (atom #{}) (atom nil)))
 
 ;;-----------------------------------------------------------------------------
 ;; App Lifecycle
 
-(defn- on-jvm-shutdown!
-  [f]
-  (doto (Runtime/getRuntime)
-    (.addShutdownHook (Thread. f))))
+(defrecord WebRepl [web-svc repl-svc repl-client]
+  ISvc
+  (start! [this]
+    (debug "Starting Web REPL.")
+    (start! web-svc)
+    (start! repl-svc)
+    (start! repl-client)
+    (on-jvm-shutdown! (fn [] (stop! this))))
+  (stop! [_]
+    (debug "Stopping Web REPL.")
+    (stop! repl-client)
+    (stop! repl-svc)
+    (stop! web-svc)))
 
-(defn start!
-  []
-  (debug "Starting application.")
-  (start-server!)
-  (start-client!)
-  (start-webapp!))
-
-(defn stop!
-  []
-  (debug "Stopping application.")
-  (stop-webapp!)
-  (stop-client!)
-  (stop-server!))
+(defn make-wrepl
+  [port]
+  (let [repl-port (find-port)
+        repl-client (make-repl-client repl-port)
+        repl-server (make-repl-server repl-port)
+        web-svc (make-web-svc port repl-client)]
+    (WebRepl. web-svc repl-server repl-client)))
 
 ;;-----------------------------------------------------------------------------
 
@@ -155,11 +198,9 @@
   "Example usage, I guess."
   [& args]
   (debug "Application bootstrap.")
-  (let [lock (promise)]
-    (on-jvm-shutdown! (fn []
-                        (stop!)))
-    (on-jvm-shutdown! (fn []
-                        (debug "Application shutdown request.")
-                        (deliver lock :done)))
-    (start!)
-    (deref lock)))
+  (let [lock (promise)
+        repl (make-wrepl 1337)]
+    ;; (on-jvm-shutdown! (fn [] (deliver lock :done)))
+    (start! repl)
+    (deref lock)
+    (System/exit 0)))
