@@ -1,0 +1,165 @@
+html, body {
+  font-family: helvetica;
+}
+
+#container {
+}
+
+/*---------------------------------------------------------------------------*/
+
+header {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: 0;
+  height: 50px;
+  background: #d8d8d8;
+  border-bottom: 1px solid #bbb;
+}
+
+header div.namespace {
+  position: absolute;
+  top: 12px;
+  left: 6px;
+  font-size: 14pt;
+  font-weight: bold;
+  color: #369;
+  font-family: monaco, monospace;
+}
+
+/*---------------------------------------------------------------------------*/
+
+#transcript {
+  position: fixed;
+  overflow: auto;
+  bottom: 150px;
+  left: 0;
+  right: 0;
+  top: 50px;
+  padding-bottom: 24px;
+}
+
+#transcript div {
+  font-size: 11pt;
+  margin-top: 6px;
+  margin-left: 16px;
+  margin-right: 16px;
+}
+
+#transcript .code {
+  color: #666;
+  font-size: 10pt;
+  font-family: monaco, consolas, monospace;
+  font-variant: italics;
+  padding: 6px;
+}
+
+#transcript .code tr td {
+  vertical-align: top;
+}
+
+#transcript .code pre {
+  margin: 0;
+  padding: 0;
+}
+
+#transcript .code .ns-value:hover {
+  cursor: pointer;
+  background-color: lavender;
+}
+
+#transcript .code .ns-place {
+  color: #666;
+  font-size: 8pt;
+}
+
+#transcript .code .ns-prompt {
+  color: darkred;
+  font-size: 8pt;
+}
+
+#transcript .code .ns-value {
+  color: #111;
+}
+
+#transcript .error {
+  color: red;
+}
+
+#transcript .stdout {
+  font-size: 10pt;
+  font-family: monaco, consolas, monospace;
+  color: #369;
+  margin-left: 24px;
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+
+#transcript .value {
+  color: darkgreen;
+  font-size: 8pt;
+  font-family: monaco, consolas, monospace;
+}
+
+/*---------------------------------------------------------------------------*/
+
+#reader {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 25px;
+  height: 100px;
+  margin: 0;
+  padding: 0;
+}
+
+#reader textarea {
+  position: absolute;
+  top: 0px;
+  right: 0px;
+  left: 0px;
+  bottom: 0px;
+  outline: none;
+  resize: none;
+  border: 0;
+  border-top: 1px solid #bbb;
+  font-size: 10pt;
+  font-family: monaco, monospace;
+  font-weight: bold;
+  letter-spacing: 1.3px;
+  color: #369;
+  padding: 6px;
+  background-color: #d8d8d8;
+  margin: 0;
+  width: 100%;
+  height: 88px;
+}
+
+#reader #input #repl-help {
+  position: absolute;
+  left: 6px;
+  bottom: 1px;
+}
+
+/*---------------------------------------------------------------------------*/
+
+#minibuf {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  height: 25px;
+  background-color: #555;
+}
+
+#minibuf p {
+  margin: 0;
+  padding: 0;
+  padding-top: 7px;
+  padding-left: 6px;
+  color: skyblue;
+  font-size: 8pt;
+  letter-spacing: 1.3pt;
+}
+
+/*---------------------------------------------------------------------------*/
