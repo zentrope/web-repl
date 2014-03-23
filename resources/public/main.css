@@ -27,6 +27,20 @@ header div.namespace {
   font-family: monaco, monospace;
 }
 
+header div.actions {
+  position: absolute;
+  top: 12px;
+  right: 6px;
+}
+
+header div.actions button {
+  font-size: 8pt;
+  color: #369;
+  cursor: pointer;
+  font-weight: bold;
+  font-variant: small-caps !important;
+}
+
 /*---------------------------------------------------------------------------*/
 
 #transcript {

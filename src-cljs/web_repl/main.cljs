@@ -63,16 +63,16 @@
   (.preventDefault e))
 
 (defn- key-handler
-  [owner e]
+  [owner e ref]
   (let [shift? (.-shiftKey e)
         enter? (= (.-keyCode e) 13)
         escape? (= (.-keyCode e) 27)]
     (when escape?
       (arrest! e)
-      (put! (q owner) [:repl-text ""]))
+      (om/set-state! owner :expr ""))
     (when (and shift? enter?)
       (arrest! e)
-      (put! (q owner) [:eval-code (value-of owner "r-input")]))))
+      (put! (q owner) [:eval-code (value-of owner ref)]))))
 
 ;;-----------------------------------------------------------------------------
 ;; View Components
@@ -83,7 +83,9 @@
   (om/component
    (html
     [:header
-     [:div.namespace (str "(ns " namespace ")")]])))
+     [:div.namespace (str "(ns " namespace ")")]
+     [:div.actions
+      [:button {:onClick #(put! (q owner) [:clear-transcript {}])} "clear"]]])))
 
 (defn- transcript-component
   [{:keys [transcript] :as state} owner]
@@ -93,7 +95,8 @@
       (let [c (.-children (om/get-node owner))
             l (alength c)
             n (aget c (dec l))]
-      (.scrollIntoView n true)))
+        (when (> l 0)
+          (.scrollIntoView n true))))
     om/IRender
     (render [_]
       (html
@@ -109,26 +112,37 @@
                                           #(put! (q owner) [:repl-text item])}
                            item]]]]]
             :value [:div.value item]
-            :stdout [:div.stdout item]
+            :stdout [:div.stdout [:pre item]]
             :error [:div.error item]
             [:div.unknown (str [type item])]))]))))
 
 (defn- reader-component
   [{:keys [repl-text] :as state} owner]
   (reify
+    om/IInitState
+    (init-state [_]
+      {:orig repl-text
+       :expr repl-text})
+    om/IDidUpdate
+    (did-update [_ _ prev-state]
+      (when (not= repl-text (:orig prev-state))
+        (om/set-state! owner :expr repl-text)
+        (om/set-state! owner :orig repl-text)
+        (focus! owner "repl-in")))
     om/IDidMount
     (did-mount [_]
-      (focus! owner "r-input"))
+      (focus! owner "repl-in"))
     om/IRender
     (render [_]
       (html
        [:section#reader
         [:section#input
          [:textarea#repl-input
-          {:ref "r-input"
-           :onChange #(om/update! state :repl-text (value-of owner "r-input"))
-           :value repl-text
-           :onKeyDown #(key-handler owner %)}]]]))))
+          {:ref "repl-in"
+           :onChange #(om/set-state! owner :expr (value-of owner "repl-in"))
+           :value (om/get-state owner :expr)
+           :defaultValue repl-text
+           :onKeyDown #(key-handler owner % "repl-in")}]]]))))
 
 (defn- mini-buffer-component
   [{:keys [message] :as state} owner]
@@ -162,7 +176,7 @@
   ;; stuff to figure out how to draw it on the screen.
   ;;
   (atom {:message "Ready."
-         :repl-text ";; Type clojure here for great fame and fortune.\n\n"
+         :repl-text ";; Start\n\n."
          :namespace "user"
          :transcript []}))
 
@@ -203,7 +217,13 @@
   [!state request]
   (set-message! !state "Evaluating...")
   (append-transcript! !state :code (trim request) (:namespace @!state))
+  (set-repl-text! !state request)
   (send @web-socket (trim request)))
+
+(defn- handle-clear-transcript!
+  [!state]
+  (swap! !state assoc :transcript [])
+  (swap! !state assoc :repl-text ""))
 
 ;;-----------------------------------------------------------------------------
 ;; Application Event Management
@@ -212,6 +232,7 @@
 (defn- apply-msg!
   [!state queue topic msg]
   (case topic
+    :clear-transcript (handle-clear-transcript! !state)
     :eval-code (handle-evaluation-request! !state msg)
     :eval-resp (handle-evaluation-response! !state msg)
     :repl-text (set-repl-text! !state msg)
@@ -222,7 +243,7 @@
   [!state queue]
   (go-loop []
     (when-let [[topic msg] (<! queue)]
-      (println "msg>" (pr-str [topic msg]))
+;;      (println "msg>" (pr-str [topic msg]))
       (try
         (apply-msg! !state queue topic msg)
         (catch js/Error e
